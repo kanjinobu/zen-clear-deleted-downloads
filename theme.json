@@ -1,0 +1,15 @@
+{
+  "name": "Hide Deleted Downloads",
+  "description": "Adds a library-tab menu command to hide download entries whose files are missing.",
+  "author": "local",
+  "version": "1.0.0",
+  "scripts": {
+    "js/hide-deleted-downloads.uc.js": {
+      "name": "Hide deleted downloads",
+      "description": "Adds a command under Clear all downloads in the Zen Library tab menu.",
+      "include": [
+        "chrome://browser/content/browser.xhtml"
+      ]
+    }
+  }
+}
