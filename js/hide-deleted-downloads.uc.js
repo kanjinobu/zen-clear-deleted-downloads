@@ -14,7 +14,7 @@
 
   // TEST MODE: remove at most one matching entry per click.
   // After successful testing, set to 0 to remove all matching entries.
-  const MAX_REMOVALS_PER_RUN = 1;
+  const MAX_REMOVALS_PER_RUN = 0;
 
   let busy = false;
 
