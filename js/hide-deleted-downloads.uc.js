@@ -1,100 +1,106 @@
-// Hide Deleted Downloads — Zen Browser 1.23.4b
-// Adds a command to the Downloads library tab context menu.
-// Uses Zen's own DownloadsCommon.deleteDownload() for each confirmed missing file.
+// Hide Deleted Downloads
+// Zen Browser 1.23.4b; Sine userChrome script
+// Adds "Hide deleted downloads" below "Clear all downloads" in the library-tab menu.
+// It does not delete files from disk. It removes missing-file download entries using Zen's
+// native DownloadsCommon.deleteDownload() method.
 
 (() => {
   "use strict";
 
-  const SCRIPT_ID = "hide-deleted-downloads-command";
+  const SCRIPT_ID = "hide-deleted-downloads-script";
   const MENU_ID = "hide-deleted-downloads-menuitem";
   const MENU_SELECTOR = ".zen-library-tab-menu";
   const CLEAR_SELECTOR = '[data-l10n-id="library-downloads-clear-all"]';
 
-  let observer;
   let busy = false;
 
   function getDownloadsCommon() {
     try {
-      if (typeof ChromeUtils === "undefined") return null;
-      const module = ChromeUtils.importESModule(
+      const { DownloadsCommon } = ChromeUtils.importESModule(
         "moz-src:///browser/components/downloads/DownloadsCommon.sys.mjs"
       );
-      return module.DownloadsCommon || null;
+      return DownloadsCommon;
     } catch (error) {
-      console.error("[HideDeletedDownloads] Could not import DownloadsCommon:", error);
+      console.error("[Hide Deleted Downloads] Could not load DownloadsCommon:", error);
       return null;
     }
   }
 
-  function getFilePath(download) {
-    // Firefox/Zen Downloads API normally exposes a file:// target URL here.
-    const target = download?.target?.path;
-    if (typeof target === "string" && target.length) return target;
-
-    const url = download?.target?.url;
-    if (typeof url === "string" && url.startsWith("file:")) {
-      try {
-        return Services.io.newURI(url).QueryInterface(Ci.nsIFileURL).file.path;
-      } catch (_) {}
+  function getTargetPath(download) {
+    if (typeof download?.target?.path === "string" && download.target.path) {
+      return download.target.path;
     }
+
+    const targetURL = download?.target?.url;
+    if (typeof targetURL === "string" && targetURL.startsWith("file:")) {
+      try {
+        return Services.io.newURI(targetURL).QueryInterface(Ci.nsIFileURL).file.path;
+      } catch (error) {
+        console.warn("[Hide Deleted Downloads] Could not resolve target URL:", error);
+      }
+    }
+
     return null;
   }
 
-  async function isDefinitelyMissing(download) {
-    const path = getFilePath(download);
-    if (!path) return false;
+  function targetFileIsMissing(download) {
+    const path = getTargetPath(download);
+    if (!path) {
+      // Unknown/non-local target: never remove it automatically.
+      return false;
+    }
 
     try {
       const file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
       file.initWithPath(path);
-      // exists() is a boolean check; any exception is treated as "unknown", not missing.
       return !file.exists();
     } catch (error) {
-      console.warn("[HideDeletedDownloads] Could not check download path; leaving it alone:", path, error);
+      // A failed check is "unknown", not proof that the file is missing.
+      console.warn("[Hide Deleted Downloads] Could not check target; leaving entry untouched:", error);
       return false;
     }
   }
 
   async function hideMissingDownloads(menuitem) {
     if (busy) return;
+
     busy = true;
     menuitem.setAttribute("disabled", "true");
 
+    let removed = 0;
     try {
-      const common = getDownloadsCommon();
-      if (!common?.deleteDownload) {
-        console.error("[HideDeletedDownloads] DownloadsCommon.deleteDownload is unavailable.");
+      const Downloads = ChromeUtils.importESModule("resource://gre/modules/Downloads.sys.mjs").Downloads;
+      const DownloadsCommon = getDownloadsCommon();
+
+      if (!DownloadsCommon || typeof DownloadsCommon.deleteDownload !== "function") {
+        console.error("[Hide Deleted Downloads] Zen's deleteDownload method is unavailable.");
         return;
       }
 
-      const downloadsModule = ChromeUtils.importESModule(
-        "resource://gre/modules/Downloads.sys.mjs"
-      );
-      const downloads = await downloadsModule.Downloads.getList(downloadsModule.Downloads.ALL);
-      const allDownloads = await downloads.getAll();
+      const list = await Downloads.getList(Downloads.ALL);
+      const downloads = await list.getAll();
 
-      let hidden = 0;
-      for (const download of allDownloads) {
-        if (await isDefinitelyMissing(download)) {
-          try {
-            await common.deleteDownload(download);
-            hidden++;
-          } catch (error) {
-            console.error("[HideDeletedDownloads] Could not hide a missing download:", error);
-          }
+      for (const download of downloads) {
+        if (!targetFileIsMissing(download)) continue;
+
+        try {
+          await DownloadsCommon.deleteDownload(download);
+          removed++;
+        } catch (error) {
+          console.error("[Hide Deleted Downloads] Failed to remove a missing-file entry:", error);
         }
       }
 
-      console.info(`[HideDeletedDownloads] Finished. Hidden missing downloads: ${hidden}.`);
+      console.info(`[Hide Deleted Downloads] Removed ${removed} missing-file download entr${removed === 1 ? "y" : "ies"}.`);
     } catch (error) {
-      console.error("[HideDeletedDownloads] Failed to scan downloads:", error);
+      console.error("[Hide Deleted Downloads] Scan failed:", error);
     } finally {
       menuitem.removeAttribute("disabled");
       busy = false;
     }
   }
 
-  function installMenuItem(menu) {
+  function addMenuItem(menu) {
     if (!menu || menu.querySelector(`#${MENU_ID}`)) return;
 
     const clearAll = menu.querySelector(CLEAR_SELECTOR);
@@ -103,26 +109,27 @@
     const item = document.createXULElement("menuitem");
     item.id = MENU_ID;
     item.setAttribute("label", "Hide deleted downloads");
-    item.setAttribute("accesskey", "H");
+    item.setAttribute("tooltiptext", "Remove download entries whose target files are missing");
     item.addEventListener("command", () => hideMissingDownloads(item));
 
-    // Place directly after "Clear all downloads", as requested.
     clearAll.insertAdjacentElement("afterend", item);
   }
 
   function scanMenus() {
-    document.querySelectorAll(MENU_SELECTOR).forEach(installMenuItem);
+    document.querySelectorAll(MENU_SELECTOR).forEach(addMenuItem);
   }
 
   function start() {
     if (document.getElementById(SCRIPT_ID)) return;
+
     const marker = document.createXULElement("box");
     marker.id = SCRIPT_ID;
     marker.hidden = true;
     document.documentElement.appendChild(marker);
 
     scanMenus();
-    observer = new MutationObserver(scanMenus);
+
+    const observer = new MutationObserver(scanMenus);
     observer.observe(document.documentElement, { childList: true, subtree: true });
   }
 
